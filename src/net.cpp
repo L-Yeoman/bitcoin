@@ -388,7 +388,12 @@ static CAddress GetBindAddress(SOCKET sock)
     }
     return addr_bind;
 }
-
+/**
+ * ConnectNode创建节点，检查节点地址没有连接之后，创建套接字，建立网络连接
+ * 1.通过ConnectSocketDirectly建立连接，此时两个节点就可以互通数据
+ * 2.创建CNode对象，将连接好的套接字、本节点支持的服务、本节点当前的区块高度封装起来
+ * 之后就可以握手了
+*/
 CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCountFailure, ConnectionType conn_type)
 {
     assert(conn_type != ConnectionType::INBOUND);
@@ -455,6 +460,8 @@ CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCo
             if (hSocket == INVALID_SOCKET) {
                 return nullptr;
             }
+            //如果没有配置代理，通过ConnectSocketDirectly连接，内部是调用socket api的connect函数
+            //此时节点的网络连接已经建立了，两个节点可以互通数据
             connected = ConnectSocketDirectly(addrConnect, hSocket, nConnectTimeout, conn_type == ConnectionType::MANUAL);
         }
         if (!proxyConnectionFailed) {
@@ -479,6 +486,9 @@ CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCo
     }
 
     // Add node
+    //创建CNode对象，将连接好的套接字和其他必要信息封装起来
+    //CNode封装了已连接的套接字、本节点支持的服务，本节点当前的区块高度
+    //连接好之后就开始握手了
     NodeId id = GetNewNodeId();
     uint64_t nonce = GetDeterministicRandomizer(RANDOMIZER_ID_LOCALHOSTNONCE).Write(id).Finalize();
     CAddress addr_bind = GetBindAddress(hSocket);
@@ -804,7 +814,7 @@ void V1TransportSerializer::prepareForTransport(CSerializedNetMsg& msg, std::vec
     header.reserve(CMessageHeader::HEADER_SIZE);
     CVectorWriter{SER_NETWORK, INIT_PROTO_VERSION, header, 0, hdr};
 }
-
+//发送消息的方法
 size_t CConnman::SocketSendData(CNode *pnode) const EXCLUSIVE_LOCKS_REQUIRED(pnode->cs_vSend)
 {
     auto it = pnode->vSendMsg.begin();
@@ -1159,7 +1169,6 @@ void CConnman::AcceptConnection(const ListenSocket& hListenSocket) {
     // We received a new connection, harvest entropy from the time (and our peer count)
     RandAddEvent((uint32_t)id);
 }
-
 void CConnman::DisconnectNodes()
 {
     {
@@ -1429,7 +1438,9 @@ void CConnman::SocketEvents(std::set<SOCKET> &recv_set, std::set<SOCKET> &send_s
     }
 }
 #endif
-
+//接收数据并处理
+//当某个节点的套接字可读时，将从套接字读取数据并把数据添加到节点的接收缓冲区
+//pNode->ReceiveMsgBytes
 void CConnman::SocketHandler()
 {
     std::set<SOCKET> recv_set, send_set, error_set;
@@ -1491,9 +1502,11 @@ void CConnman::SocketHandler()
             if (nBytes > 0)
             {
                 bool notify = false;
+                //从套接字读取数据并把数据添加到节点的接收缓冲区
                 if (!pnode->ReceiveMsgBytes(pchBuf, nBytes, notify))
                     pnode->CloseSocketDisconnect();
                 RecordBytesRecv(nBytes);
+                //把接收缓冲区的数据拼接到待处理消息缓冲区，通知消息处理线程有新的消息需要处理
                 if (notify) {
                     size_t nSizeAdded = 0;
                     auto it(pnode->vRecvMsg.begin());
@@ -1508,6 +1521,7 @@ void CConnman::SocketHandler()
                         pnode->nProcessQueueSize += nSizeAdded;
                         pnode->fPauseRecv = pnode->nProcessQueueSize > nReceiveFloodSize;
                     }
+                    //唤醒消息处理线程
                     WakeMessageHandler();
                 }
             }
@@ -1535,7 +1549,7 @@ void CConnman::SocketHandler()
 
         //
         // Send
-        //
+        //当某个节点的套接字可写时将数据通过套接字发送出去
         if (sendSet)
         {
             LOCK(pnode->cs_vSend);
@@ -1553,13 +1567,14 @@ void CConnman::SocketHandler()
             pnode->Release();
     }
 }
-
 void CConnman::ThreadSocketHandler()
 {
     while (!interruptNet)
     {
+        //遍历所有节点，将其套接字加入到接收描述符集合、发送描述符集合
         DisconnectNodes();
         NotifyNumConnectionsChanged();
+        //接收数据并处理
         SocketHandler();
     }
 }
@@ -1581,6 +1596,14 @@ void CConnman::WakeMessageHandler()
 #ifdef USE_UPNP
 static CThreadInterrupt g_upnp_interrupt;
 static std::thread g_upnp_thread;
+/**
+ * 1.获取默认端口号8333
+ * 2.映射此端口号到公网ip上
+ * 3.调用upnpDiscover查找当前局域网中所有的upnp设备
+ * 4.调用UPNP_GetValidlGD,从设备列表中找到有效的IGD设备
+ * 5.调用UPNP_GetExternallPAddress获取公网地址，然后对此地址进行DNS查询，将解析到的地址记录到内存中，随后传播到其他节点
+ * 6.调用UPNP_AddPortMapping进行端口映射
+*/
 static void ThreadMapPort()
 {
     std::string port = strprintf("%u", GetListenPort());
@@ -1591,6 +1614,7 @@ static void ThreadMapPort()
 
     int error = 0;
 #if MINIUPNPC_API_VERSION < 14
+//查找当前局域网中所有的upnp设备
     devlist = upnpDiscover(2000, multicastif, minissdpdpath, 0, 0, &error);
 #else
     devlist = upnpDiscover(2000, multicastif, minissdpdpath, 0, 0, 2, &error);
@@ -1599,12 +1623,13 @@ static void ThreadMapPort()
     struct UPNPUrls urls;
     struct IGDdatas data;
     int r;
-
+    //调用UPNP_GetValidlGD，查询到有效的IGD设备
     r = UPNP_GetValidIGD(devlist, &urls, &data, lanaddr, sizeof(lanaddr));
     if (r == 1)
     {
         if (fDiscover) {
             char externalIPAddress[40];
+            //获取公网地址，对此地址进行DNS解析然后保存
             r = UPNP_GetExternalIPAddress(urls.controlURL, data.first.servicetype, externalIPAddress);
             if (r != UPNPCOMMAND_SUCCESS) {
                 LogPrintf("UPnP: GetExternalIPAddress() returned %d\n", r);
@@ -1624,6 +1649,7 @@ static void ThreadMapPort()
         std::string strDesc = PACKAGE_NAME " " + FormatFullVersion();
 
         do {
+            //最后进行端口映射
             r = UPNP_AddPortMapping(urls.controlURL, data.first.servicetype, port.c_str(), port.c_str(), lanaddr, strDesc.c_str(), "TCP", 0, "0");
 
             if (r != UPNPCOMMAND_SUCCESS) {
@@ -1644,7 +1670,7 @@ static void ThreadMapPort()
             FreeUPNPUrls(&urls);
     }
 }
-
+//开启线程进行端口映射，通过开源miniupnp进行内网穿透
 void StartMapPort()
 {
     if (!g_upnp_thread.joinable()) {
@@ -1687,10 +1713,16 @@ void StopMapPort()
 
 
 
-
+/**
+ * 利用种子发现节点有两种方式，
+ * 一种是开启-dnsseed选项（默认开启）连接内置的一些由专人维护的比较稳定的DNS种子，
+ * 还由一种是通过-seednode选项指定种子节点。
+ * 这里dnsseed线程的作用是在开启-dnsseed选项时，解析比特币P2P网络内置的DNS种子
+*/
 void CConnman::ThreadDNSAddressSeed()
 {
     FastRandomContext rng;
+    //拿到内置的DNS种子节点
     std::vector<std::string> seeds = Params().DNSSeeds();
     Shuffle(seeds.begin(), seeds.end(), rng);
     int seeds_right_now = 0; // Number of seeds left before testing if we have enough connections
@@ -1718,6 +1750,18 @@ void CConnman::ThreadDNSAddressSeed()
     // * If we continue having problems, eventually query all the
     //   DNS seeds, and if that fails too, also try the fixed seeds.
     //   (done in ThreadOpenConnections)
+    //目标：仅当地址需要是紧急的时才查询DNS种子
+    //*如果我们在addrman中有合理数量的对等点，那么
+    //有时间先试试。这通过  
+    //创建更少的标识DNS请求，通过
+    //减少种子对网络拓扑的影响，以及    
+    //减少种子的流量。
+    //*当一次查询几个DNS种子时，这确保
+    //我们没有赋予DNS种子eclipse节点的能力
+    //询问他们。
+    //*如果我们继续遇到问题，最终查询所有
+    //DNS种子，如果失败了，也尝试固定种子。
+    //（在ThreadOpenConnections中完成）
     const std::chrono::seconds seeds_wait_time = (addrman.size() >= DNSSEEDS_DELAY_PEER_THRESHOLD ? DNSSEEDS_DELAY_MANY_PEERS : DNSSEEDS_DELAY_FEW_PEERS);
 
     for (const std::string& seed : seeds) {
@@ -1778,6 +1822,7 @@ void CConnman::ThreadDNSAddressSeed()
                 continue;
             }
             unsigned int nMaxIPs = 256; // Limits number of IPs learned from a DNS seed
+            //LookupHost,进行dns查询，这个函数最终调用的是操作系统api：getaddrinfo，解析到的ip地址存入CAddrMan备用
             if (LookupHost(host, vIPs, nMaxIPs, true)) {
                 for (const CNetAddr& ip : vIPs) {
                     int nOneDay = 24*3600;
@@ -1808,7 +1853,7 @@ void CConnman::DumpAddresses()
     LogPrint(BCLog::NET, "Flushed %d addresses to peers.dat  %dms\n",
            addrman.size(), GetTimeMillis() - nStart);
 }
-
+ //   最终调用了OpenNetworkConnection来连接这些种子节点。
 void CConnman::ProcessAddrFetch()
 {
     std::string strDest;
@@ -1822,6 +1867,7 @@ void CConnman::ProcessAddrFetch()
     CAddress addr;
     CSemaphoreGrant grant(*semOutbound, true);
     if (grant) {
+        //    最终调用了OpenNetworkConnection来连接这些种子节点。
         OpenNetworkConnection(addr, false, &grant, strDest.c_str(), ConnectionType::ADDR_FETCH);
     }
 }
@@ -1856,7 +1902,7 @@ int CConnman::GetExtraOutboundCount()
     }
     return std::max(nOutbound - m_max_outbound_full_relay - m_max_outbound_block_relay, 0);
 }
-
+//建立节点的连接
 void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
 {
     // Connect to specific addresses
@@ -1887,6 +1933,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect)
     int64_t nNextFeeler = PoissonNextSend(nStart*1000*1000, FEELER_INTERVAL);
     while (!interruptNet)
     {
+        //如果用户通过-seednode指定了种子节点，那么将尝试连接这些种子节点
         ProcessAddrFetch();
 
         if (!interruptNet.sleep_for(std::chrono::milliseconds(500)))
@@ -2176,6 +2223,7 @@ void CConnman::ThreadOpenAddedConnections()
 }
 
 // if successful, this moves the passed grant to the constructed node
+//进行节点连接，主要两步：ConnectNode创建节点连接已发现节点，InitializeNode初始化节点发送version握手消息
 void CConnman::OpenNetworkConnection(const CAddress& addrConnect, bool fCountFailure, CSemaphoreGrant *grantOutbound, const char *pszDest, ConnectionType conn_type)
 {
     assert(conn_type != ConnectionType::INBOUND);
@@ -2203,14 +2251,15 @@ void CConnman::OpenNetworkConnection(const CAddress& addrConnect, bool fCountFai
         return;
     if (grantOutbound)
         grantOutbound->MoveTo(pnode->grantOutbound);
-
+    //节点初始化，发送握手消息
     m_msgproc->InitializeNode(pnode);
     {
         LOCK(cs_vNodes);
         vNodes.push_back(pnode);
     }
 }
-
+//消息处理线程
+//从节点的缓冲区中取出一个消息，处理，然后阻塞等待下一条消息
 void CConnman::ThreadMessageHandler()
 {
     while (!flagInterruptMsgProc)
@@ -2232,6 +2281,7 @@ void CConnman::ThreadMessageHandler()
                 continue;
 
             // Receive messages
+            //ProcessMessafes从节点的接收缓冲区中取消息并处理
             bool fMoreNodeWork = m_msgproc->ProcessMessages(pnode, flagInterruptMsgProc);
             fMoreWork |= (fMoreNodeWork && !pnode->fPauseSend);
             if (flagInterruptMsgProc)
@@ -2239,6 +2289,7 @@ void CConnman::ThreadMessageHandler()
             // Send messages
             {
                 LOCK(pnode->cs_sendProcessing);
+                //将节点发送缓冲区的消息发送出去
                 m_msgproc->SendMessages(pnode);
             }
 
@@ -2451,6 +2502,7 @@ bool CConnman::InitBinds(
 
 bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
 {
+    //使用参数connOptions对CConnman进行初始化
     Init(connOptions);
 
     {
@@ -2481,9 +2533,11 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
         clientInterface->InitMessage(_("Loading P2P addresses...").translated);
     }
     // Load addresses from peers.dat
+    //加载之前连接过的对等节点的地址
     int64_t nStart = GetTimeMillis();
     {
         CAddrDB adb;
+        //addrman 一个小型的DB
         if (adb.Read(addrman))
             LogPrintf("Loaded %i addresses from peers.dat  %dms\n", addrman.size(), GetTimeMillis() - nStart);
         else {
@@ -2529,11 +2583,13 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
     }
 
     // Send and receive from sockets, accept connections
+    //启动net线程，将任务交给线程，从套接字发送和接收数据，监听其他节点的连接请求
     threadSocketHandler = std::thread(&TraceThread<std::function<void()> >, "net", std::function<void()>(std::bind(&CConnman::ThreadSocketHandler, this)));
 
     if (!gArgs.GetBoolArg("-dnsseed", true))
         LogPrintf("DNS seeding disabled\n");
     else
+    //启动dnsseed线程，通过dns查询解析出种子的节点地址，之后新启动的节点要向这些种子节点发起连接 
         threadDNSAddressSeed = std::thread(&TraceThread<std::function<void()> >, "dnsseed", std::function<void()>(std::bind(&CConnman::ThreadDNSAddressSeed, this)));
 
     // Initiate manual connections
@@ -2548,9 +2604,11 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
         return false;
     }
     if (connOptions.m_use_addrman_outgoing || !connOptions.m_specified_outgoing.empty())
+        //启动线程，向已发现的节点发起连接
         threadOpenConnections = std::thread(&TraceThread<std::function<void()> >, "opencon", std::function<void()>(std::bind(&CConnman::ThreadOpenConnections, this, connOptions.m_specified_outgoing)));
 
     // Process messages
+    //此线程负责比特币P2P协议的消息处理
     threadMessageHandler = std::thread(&TraceThread<std::function<void()> >, "msghand", std::function<void()>(std::bind(&CConnman::ThreadMessageHandler, this)));
 
     // Dump network addresses

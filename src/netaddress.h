@@ -115,6 +115,7 @@ static constexpr size_t ADDR_INTERNAL_SIZE = 10;
 
 /**
  * Network address.
+ * 对IP地址的封装，这个类中还包含了一些对IP地址类型进行各种判断的工具函数
  */
 class CNetAddr
 {
@@ -519,7 +520,9 @@ class CSubNet
         }
 };
 
-/** A combination of a network address (CNetAddr) and a (TCP) port */
+/** A combination of a network address (CNetAddr) and a (TCP) port 
+ * 继承了CNetAddr,在其基础上多加了端口号的属性
+*/
 class CService : public CNetAddr
 {
     protected:

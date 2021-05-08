@@ -46,6 +46,7 @@ static bool AppInit(int argc, char* argv[])
     util::ThreadSetInternalName("init");
 
     // If Qt is used, parameters/bitcoin.conf are parsed in qt/bitcoin.cpp's main()
+    //初始化服务端的所有相关参数
     SetupServerArgs(node);
     ArgsManager& args = *Assert(node.args);
     std::string error;
@@ -157,7 +158,7 @@ static bool AppInit(int argc, char* argv[])
 
     return fRet;
 }
-
+//比特币核心入口
 int main(int argc, char* argv[])
 {
 #ifdef WIN32
@@ -168,6 +169,6 @@ int main(int argc, char* argv[])
 
     // Connect bitcoind signal handlers
     noui_connect();
-
+    //核心初始化操作
     return (AppInit(argc, argv) ? EXIT_SUCCESS : EXIT_FAILURE);
 }

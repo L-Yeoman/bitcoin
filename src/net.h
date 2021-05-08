@@ -617,12 +617,16 @@ uint16_t GetListenPort();
 
 /**
  * Interface for message handling
+ * 网络接口类
  */
 class NetEventsInterface
 {
 public:
+    //处理接收到的消息
     virtual bool ProcessMessages(CNode* pnode, std::atomic<bool>& interrupt) = 0;
+    //发送消息
     virtual bool SendMessages(CNode* pnode) = 0;
+    //初始化节点
     virtual void InitializeNode(CNode* pnode) = 0;
     virtual void FinalizeNode(const CNode& node, bool& update_connection_time) = 0;
 
@@ -836,7 +840,9 @@ public:
     void prepareForTransport(CSerializedNetMsg& msg, std::vector<unsigned char>& header) override;
 };
 
-/** Information about a peer */
+/** Information about a peer 
+ * 维护节点信息，包括通信套接字、发送缓冲区、接收缓冲区
+*/
 class CNode
 {
     friend class CConnman;

@@ -486,7 +486,7 @@ static void UpdatePreferredDownload(const CNode& node, CNodeState* state) EXCLUS
 
     nPreferredDownload += state->fPreferredDownload;
 }
-
+//version消息将本节点的nLocalService、addrMe、addrYou以及当前节点的区块高度发送给peer
 static void PushNodeVersion(CNode& pnode, CConnman& connman, int64_t nTime)
 {
     // Note that pnode->GetLocalServices() is a reflection of the local
@@ -502,7 +502,7 @@ static void PushNodeVersion(CNode& pnode, CConnman& connman, int64_t nTime)
                            addr :
                            CAddress(CService(), addr.nServices);
     CAddress addrMe = CAddress(CService(), nLocalNodeServices);
-
+    //根据p2p协议，发送握手消息
     connman.PushMessage(&pnode, CNetMsgMaker(INIT_PROTO_VERSION).Make(NetMsgType::VERSION, PROTOCOL_VERSION, (uint64_t)nLocalNodeServices, nTime, addrYou, addrMe,
             nonce, strSubVersion, nNodeStartingHeight, ::g_relay_txes && pnode.m_tx_relay != nullptr));
 
@@ -798,7 +798,7 @@ void UpdateLastBlockAnnounceTime(NodeId node, int64_t time_in_seconds)
     CNodeState *state = State(node);
     if (state) state->m_last_block_announcement = time_in_seconds;
 }
-
+//初始化，发送握手消息
 void PeerManager::InitializeNode(CNode *pnode) {
     CAddress addr = pnode->addr;
     std::string addrName = pnode->GetAddrName();
@@ -814,6 +814,7 @@ void PeerManager::InitializeNode(CNode *pnode) {
         g_peer_map.emplace_hint(g_peer_map.end(), nodeid, std::move(peer));
     }
     if (!pnode->IsInboundConn()) {
+        //向peer发送version消息
         PushNodeVersion(*pnode, m_connman, GetTime());
     }
 }
@@ -2284,7 +2285,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
 
     PeerRef peer = GetPeerRef(pfrom.GetId());
     if (peer == nullptr) return;
-
+    //收到VERSION消息,检验合法性,最后发送verack确认
     if (msg_type == NetMsgType::VERSION) {
         // Each connection can only send one version message
         if (pfrom.nVersion != 0)
@@ -3811,7 +3812,11 @@ bool PeerManager::MaybeDiscourageAndDisconnect(CNode& pnode)
     m_connman.DisconnectNode(pnode.addr);
     return true;
 }
-
+/**
+ * 从节点消息缓冲区vProcessMsg中取出消息
+ * 然后读取消息头、消息校验和、消息长度等
+ * 最后调用processMessage处理消息
+*/
 bool PeerManager::ProcessMessages(CNode* pfrom, std::atomic<bool>& interruptMsgProc)
 {
     bool fMoreWork = false;

@@ -24,8 +24,9 @@ public:
     static const std::string SIGNET;
     static const std::string REGTEST;
     ///@}
-
+    //数据存储的目录
     const std::string& DataDir() const { return strDataDir; }
+    //客户端和服务端的rpc端口
     uint16_t RPCPort() const { return m_rpc_port; }
     uint16_t OnionServiceTargetPort() const { return m_onion_service_target_port; }
 

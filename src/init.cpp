@@ -376,8 +376,13 @@ void SetupServerArgs(NodeContext& node)
 
     SetupHelpOptions(argsman);
     argsman.AddArg("-help-debug", "Print help message with debugging options and exit", ArgsManager::ALLOW_ANY, OptionsCategory::DEBUG_TEST); // server-only for now
-
+    /** CBaseChainParams,比特币客户端和服务端共享的一个类，
+     * 定义了比特币的参数，主要是数据存储目录和相互通信的rpc端口
+     * CChainParams,定义了P2P网络默认的监听端口，和内置的种子节点
+     * CMainParams初始化内置的种子节点
+    */
     const auto defaultBaseParams = CreateBaseChainParams(CBaseChainParams::MAIN);
+    //针对比特币主网和测试用公网生成了不同的默认参数
     const auto testnetBaseParams = CreateBaseChainParams(CBaseChainParams::TESTNET);
     const auto signetBaseParams = CreateBaseChainParams(CBaseChainParams::SIGNET);
     const auto regtestBaseParams = CreateBaseChainParams(CBaseChainParams::REGTEST);
@@ -1263,6 +1268,7 @@ bool AppInitInterfaces(NodeContext& node)
 bool AppInitMain(const util::Ref& context, NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 {
     const ArgsManager& args = *Assert(node.args);
+    //CChainParams定义了比特币系统重要的参数（默认p2p网络端口、种子节点等）
     const CChainParams& chainparams = Params();
     // ********************************************************* Step 4a: application initialization
     if (!CreatePidFile(args)) {
@@ -1387,6 +1393,7 @@ bool AppInitMain(const util::Ref& context, NodeContext& node, interfaces::BlockA
     assert(!node.banman);
     node.banman = MakeUnique<BanMan>(GetDataDir() / "banlist.dat", &uiInterface, args.GetArg("-bantime", DEFAULT_MISBEHAVING_BANTIME));
     assert(!node.connman);
+    //创建连接管理对象CConman，该对象用来管理网络连接，负责节点初始化及启动，P2P消息的推送和接受
     node.connman = MakeUnique<CConnman>(GetRand(std::numeric_limits<uint64_t>::max()), GetRand(std::numeric_limits<uint64_t>::max()), args.GetBoolArg("-networkactive", true));
 
     // Make mempool generally available in the node context. For example the connection manager, wallet, or RPC threads,
@@ -1917,14 +1924,20 @@ bool AppInitMain(const util::Ref& context, NodeContext& node, interfaces::BlockA
         }
     }
     LogPrintf("nBestHeight = %d\n", chain_active_height);
-
+    //找到所有的本地网络接口地址，并保存起来，随后发送给连接到的对等节点（广播本机地址）
     Discover();
 
     // Map ports with UPnP
+    //内网穿透，开启端口映射，让网络中其他节点发现自己
     if (args.GetBoolArg("-upnp", DEFAULT_UPNP)) {
         StartMapPort();
     }
-
+    /*初始化一个封装网络连接各种参数的CConnman::Options对象
+     *这些参数包含了后续网络和通信过程中的很多参数，
+     *比如一个节点允许的最大连接数
+     *能够连接的外部节点的最大数目
+     *seednode选项指定的种子节点
+    */
     CConnman::Options connOptions;
     connOptions.nLocalServices = nLocalServices;
     connOptions.nMaxConnections = nMaxConnections;
@@ -2001,6 +2014,7 @@ bool AppInitMain(const util::Ref& context, NodeContext& node, interfaces::BlockA
             connOptions.m_specified_outgoing = connect;
         }
     }
+    //从这里开始启动节点、发现节点
     if (!node.connman->Start(*node.scheduler, connOptions)) {
         return false;
     }
