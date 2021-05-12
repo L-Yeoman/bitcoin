@@ -88,7 +88,7 @@ public:
              nTimeLast = nTimeIn;
      }
 };
-
+//区块的状态
 enum BlockStatus: uint32_t {
     //! Unused.
     BLOCK_VALID_UNKNOWN      =    0,
@@ -98,6 +98,7 @@ enum BlockStatus: uint32_t {
 
     //! All parent headers found, difficulty matches, timestamp >= median previous, checkpoint. Implies all parents
     //! are also at least TREE.
+    //区块所有父区块的头部都被找到了
     BLOCK_VALID_TREE         =    2,
 
     /**
@@ -105,13 +106,16 @@ enum BlockStatus: uint32_t {
      * sigops, size, merkle root. Implies all parents are at least TREE but not necessarily TRANSACTIONS. When all
      * parent blocks also have TRANSACTIONS, CBlockIndex::nChainTx will be set.
      */
+    //区块有有效的交易，即有且仅有一笔coinbase交易
     BLOCK_VALID_TRANSACTIONS =    3,
 
     //! Outputs do not overspend inputs, no double spends, coinbase output ok, no immature coinbase spends, BIP30.
     //! Implies all parents are also at least CHAIN.
+    //交易输出没问题，没有双花问题
     BLOCK_VALID_CHAIN        =    4,
 
     //! Scripts & signatures ok. Implies all parents are also at least SCRIPTS.
+    //交易脚本和签名没问题
     BLOCK_VALID_SCRIPTS      =    5,
 
     //! All validity bits.
@@ -134,50 +138,63 @@ enum BlockStatus: uint32_t {
  * candidates to be the next block. A blockindex may have multiple pprev pointing
  * to it, but at most one of them can be part of the currently active branch.
  */
+//内存中的区块链是由CBlockIndexde的向量来表示的
 class CBlockIndex
 {
 public:
     //! pointer to the hash of the block, if any. Memory is owned by this CBlockIndex
+    //指向区块hash值的指针
     const uint256* phashBlock{nullptr};
 
     //! pointer to the index of the predecessor of this block
+    //指向上一个区块的指针
     CBlockIndex* pprev{nullptr};
 
     //! pointer to the index of some further predecessor of this block
+    //指向区块更远的祖先的指针
     CBlockIndex* pskip{nullptr};
 
     //! height of the entry in the chain. The genesis block has height 0
+    //该区块的高度，从创世区块算起
     int nHeight{0};
 
     //! Which # file this block is stored in (blk?????.dat)
+    //存储本区块的数据的文件，比如第100个区块，其区块文件存储在blk100.data中
     int nFile{0};
 
     //! Byte offset within blk?????.dat where this block's data is stored
+    //区块的数据取在blkxxx.data中的偏移量
     unsigned int nDataPos{0};
 
     //! Byte offset within rev?????.dat where this block's undo data is stored
     unsigned int nUndoPos{0};
 
     //! (memory only) Total amount of work (expected number of hashes) in the chain up to and including this block
+    //从创世区块到本区块的累计工作量
     arith_uint256 nChainWork{};
 
     //! Number of transactions in this block.
     //! Note: in a potential headers-first mode, this number cannot be relied upon
+    //区块中包含的交易数
     unsigned int nTx{0};
 
     //! (memory only) Number of transactions in the chain up to and including this block.
     //! This value will be non-zero only if and only if transactions for this block and all its parents are available.
     //! Change to 64-bit type when necessary; won't happen before 2030
+    //从创世区块到本区块的所有交易的数量，只有收到区块以及它所有的父区块的交易数据时这个值才会非0
     unsigned int nChainTx{0};
 
     //! Verification status of this block. See enum BlockStatus
+    //区块的状态
     uint32_t nStatus{0};
 
     //! block header
-    int32_t nVersion{0};
-    uint256 hashMerkleRoot{};
-    uint32_t nTime{0};
-    uint32_t nBits{0};
+    //区块头
+    int32_t nVersion{0};//版本
+    uint256 hashMerkleRoot{};//merkel树的树根
+    uint32_t nTime{0};//时间戳
+    //这俩变量用于计算POW
+    uint32_t nBits{0};//难度位
     uint32_t nNonce{0};
 
     //! (memory only) Sequential id assigned to distinguish order in which blocks are received.
