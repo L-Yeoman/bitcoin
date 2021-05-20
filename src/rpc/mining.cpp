@@ -104,7 +104,7 @@ static RPCHelpMan getnetworkhashps()
 },
     };
 }
-
+//挖矿方法的二次封装
 static bool GenerateBlock(ChainstateManager& chainman, CBlock& block, uint64_t& max_tries, unsigned int& extra_nonce, uint256& block_hash)
 {
     block_hash.SetNull();
@@ -115,7 +115,8 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock& block, uint64_t& 
     }
 
     CChainParams chainparams(Params());
-
+    //计算Pow工作量证明，拼算力的地方就在这里
+    //CheckProofOfWork 计算工作量，判断是否挖矿成功
     while (max_tries > 0 && block.nNonce < std::numeric_limits<uint32_t>::max() && !CheckProofOfWork(block.GetHash(), block.nBits, chainparams.GetConsensus()) && !ShutdownRequested()) {
         ++block.nNonce;
         --max_tries;
@@ -123,10 +124,11 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock& block, uint64_t& 
     if (max_tries == 0 || ShutdownRequested()) {
         return false;
     }
+    //超过单轮循环的上限（65536次）,构造候选区块重新开始
     if (block.nNonce == std::numeric_limits<uint32_t>::max()) {
         return true;
     }
-
+    //处理新区块
     std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(block);
     if (!chainman.ProcessNewBlock(chainparams, shared_pblock, true, nullptr)) {
         throw JSONRPCError(RPC_INTERNAL_ERROR, "ProcessNewBlock, block not accepted");
@@ -135,7 +137,7 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock& block, uint64_t& 
     block_hash = block.GetHash();
     return true;
 }
-
+//生成新区块
 static UniValue generateBlocks(ChainstateManager& chainman, const CTxMemPool& mempool, const CScript& coinbase_script, int nGenerate, uint64_t nMaxTries)
 {
     int nHeightEnd = 0;
@@ -143,13 +145,17 @@ static UniValue generateBlocks(ChainstateManager& chainman, const CTxMemPool& me
 
     {   // Don't keep cs_main locked
         LOCK(cs_main);
+        //当前区块链的高度
         nHeight = ::ChainActive().Height();
+        //挖矿后的目标高度
         nHeightEnd = nHeight+nGenerate;
     }
     unsigned int nExtraNonce = 0;
     UniValue blockHashes(UniValue::VARR);
+    //开始挖矿
     while (nHeight < nHeightEnd && !ShutdownRequested())
     {
+        //构造候选区块
         std::unique_ptr<CBlockTemplate> pblocktemplate(BlockAssembler(mempool, Params()).CreateNewBlock(coinbase_script));
         if (!pblocktemplate.get())
             throw JSONRPCError(RPC_INTERNAL_ERROR, "Couldn't create new block");
@@ -201,7 +207,6 @@ static bool getScriptFromDescriptor(const std::string& descriptor, CScript& scri
         return false;
     }
 }
-
 static RPCHelpMan generatetodescriptor()
 {
     return RPCHelpMan{
@@ -250,7 +255,7 @@ static RPCHelpMan generate()
     }
     }};
 }
-
+//通过 bitcoin-cli generatetoaddress 命令挖取新区块，这是具体实现
 static RPCHelpMan generatetoaddress()
 {
     return RPCHelpMan{"generatetoaddress",
@@ -285,7 +290,7 @@ static RPCHelpMan generatetoaddress()
     ChainstateManager& chainman = EnsureChainman(request.context);
 
     CScript coinbase_script = GetScriptForDestination(destination);
-
+    //从这里生成新的区块
     return generateBlocks(chainman, mempool, coinbase_script, num_blocks, max_tries);
 },
     };

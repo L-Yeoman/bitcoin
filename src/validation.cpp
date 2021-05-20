@@ -1232,14 +1232,19 @@ bool ReadRawBlockFromDisk(std::vector<uint8_t>& block, const CBlockIndex* pindex
 
     return ReadRawBlockFromDisk(block, block_pos, message_start);
 }
-
+//矿工给奖励计算，根据当前区块的高度来确定
 CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)
 {
+    //当前区块的高度除以nSubsidvHalvingInterval，这个值时210000（chainparams.cpp 定义）
     int halvings = nHeight / consensusParams.nSubsidyHalvingInterval;
     // Force block reward to zero when right shift is undefined.
+    //如果相除的结果大于或等于64，则奖励费为0
+    //换句话说，当区块的高度超过64*210000的时候系统停止奖励
+    //按比特币规则每10分钟生成一个区块，生成第64*210000个区块大约需要255年，约2214年左右
+    //挖矿只能得到交易费，不会产生新的奖励，即不会创造新币
     if (halvings >= 64)
         return 0;
-
+    //如果区块小于64*210000，初始奖励50个比特币，每隔210000个区块奖励费减半，约每隔4年
     CAmount nSubsidy = 50 * COIN;
     // Subsidy is cut in half every 210,000 blocks which will occur approximately every 4 years.
     nSubsidy >>= halvings;
@@ -2665,6 +2670,7 @@ bool CChainState::ConnectTip(BlockValidationState& state, const CChainParams& ch
 }
 
 /**
+ * 查找工作量最大分支的顶点区块
  * Return the tip of the chain with the most work in it, that isn't
  * known to be invalid (it's however far from certain to be valid).
  */
@@ -2673,6 +2679,7 @@ CBlockIndex* CChainState::FindMostWorkChain() {
         CBlockIndex *pindexNew = nullptr;
 
         // Find the best candidate header.
+        //从候选区块集合中找到工作量最大的候选区块
         {
             std::set<CBlockIndex*, CBlockIndexWorkComparator>::reverse_iterator it = setBlockIndexCandidates.rbegin();
             if (it == setBlockIndexCandidates.rend())
@@ -2684,6 +2691,9 @@ CBlockIndex* CChainState::FindMostWorkChain() {
         // Just going until the active chain is an optimization, as we know all blocks in it are valid already.
         CBlockIndex *pindexTest = pindexNew;
         bool fInvalidAncestor = false;
+        //从选出的具有最大工作量的候选区块开始回溯，一致回溯到存在于区块链上的祖先区块为止，
+        //例如当前区块链顶点是A，然后候选区块按工作量依次是B、C、D,B是C的父区块，C是D的父区块
+        //则从D开始回溯，一直到区块A为止，setBlockIndexCandidates中包含<B,C,D>
         while (pindexTest && !m_chain.Contains(pindexTest)) {
             assert(pindexTest->HaveTxsDownloaded() || pindexTest->nHeight == 0);
 
@@ -2691,12 +2701,16 @@ CBlockIndex* CChainState::FindMostWorkChain() {
             // which block files have been deleted.  Remove those as candidates
             // for the most work chain if we come across them; we can't switch
             // to a chain unless we have all the non-active-chain parent blocks.
+            //区块是否是一个坏区块
             bool fFailedChain = pindexTest->nStatus & BLOCK_FAILED_MASK;
+            //是否尚未收到完整区块
             bool fMissingData = !(pindexTest->nStatus & BLOCK_HAVE_DATA);
             if (fFailedChain || fMissingData) {
                 // Candidate chain is not usable (either invalid or missing data)
                 if (fFailedChain && (pindexBestInvalid == nullptr || pindexNew->nChainWork > pindexBestInvalid->nChainWork))
                     pindexBestInvalid = pindexNew;
+                //假设从A->D的路径上，当回溯到区块B时发现B的完整区块尚未收到，则向mapBlockUnlinked中添加<B,C><C,D>
+                //同时将B、C和D从候选区块集合setBlockIndexCandidates中移除
                 CBlockIndex *pindexFailed = pindexNew;
                 // Remove the entire chain from the set.
                 while (pindexTest != pindexFailed) {
@@ -2714,8 +2728,10 @@ CBlockIndex* CChainState::FindMostWorkChain() {
                 }
                 setBlockIndexCandidates.erase(pindexTest);
                 fInvalidAncestor = true;
+                //跳出本轮循环
                 break;
             }
+            //向前回溯到父区块
             pindexTest = pindexTest->pprev;
         }
         if (!fInvalidAncestor)
@@ -2736,6 +2752,7 @@ void CChainState::PruneBlockIndexCandidates() {
 }
 
 /**
+ * 将找到的工作量最大的区块加入区块链
  * Try to make some progress towards making pindexMostWork the active block.
  * pblock is either nullptr or a pointer to a CBlock corresponding to pindexMostWork.
  *
@@ -2745,17 +2762,20 @@ bool CChainState::ActivateBestChainStep(BlockValidationState& state, const CChai
 {
     AssertLockHeld(cs_main);
     AssertLockHeld(m_mempool.cs);
-
+    //当前区块链的顶点
     const CBlockIndex *pindexOldTip = m_chain.Tip();
+    //如果区块链有分叉，找到分叉点
     const CBlockIndex *pindexFork = m_chain.FindFork(pindexMostWork);
 
     // Disconnect active blocks which are no longer in the best chain.
+    //从分叉点到当前区块链顶点之间的区块从主链上全部断开
     bool fBlocksDisconnected = false;
     DisconnectedBlockTransactions disconnectpool;
     while (m_chain.Tip() && m_chain.Tip() != pindexFork) {
         if (!DisconnectTip(state, chainparams, &disconnectpool)) {
             // This is likely a fatal error, but keep the mempool consistent,
             // just in case. Only remove from the mempool in this case.
+            //断开区块过程中发生错误，需要更新交易池
             UpdateMempoolForReorg(m_mempool, disconnectpool, false);
 
             // If we're unable to disconnect a block during normal operation,
@@ -2774,6 +2794,7 @@ bool CChainState::ActivateBestChainStep(BlockValidationState& state, const CChai
     while (fContinue && nHeight != pindexMostWork->nHeight) {
         // Don't iterate the entire list of potential improvements toward the best tip, as we likely only need
         // a few blocks along the way.
+        //计算出需要添加到区块链上的区块
         int nTargetHeight = std::min(nHeight + 32, pindexMostWork->nHeight);
         vpindexToConnect.clear();
         vpindexToConnect.reserve(nTargetHeight - nHeight);
@@ -2783,7 +2804,7 @@ bool CChainState::ActivateBestChainStep(BlockValidationState& state, const CChai
             pindexIter = pindexIter->pprev;
         }
         nHeight = nTargetHeight;
-
+        //将新区块连接到区块链上
         // Connect new blocks.
         for (CBlockIndex *pindexConnect : reverse_iterate(vpindexToConnect)) {
             if (!ConnectTip(state, chainparams, pindexConnect, pindexConnect == pindexMostWork ? pblock : std::shared_ptr<const CBlock>(), connectTrace, disconnectpool)) {
@@ -2800,10 +2821,12 @@ bool CChainState::ActivateBestChainStep(BlockValidationState& state, const CChai
                     // A system error occurred (disk space, database error, ...).
                     // Make the mempool consistent with the current tip, just in case
                     // any observers try to use it before shutdown.
+                    //更新内存交易池
                     UpdateMempoolForReorg(m_mempool, disconnectpool, false);
                     return false;
                 }
             } else {
+                //新区块成功添加到了区块链上，将候选区块集合中的所有比新区块工作量少的区块移除
                 PruneBlockIndexCandidates();
                 if (!pindexOldTip || m_chain.Tip()->nChainWork > pindexOldTip->nChainWork) {
                     // We're in a better position than we were. Return temporarily to release the lock.
@@ -2813,7 +2836,7 @@ bool CChainState::ActivateBestChainStep(BlockValidationState& state, const CChai
             }
         }
     }
-
+    //如果有断开的区块，需要更新下内存交易池
     if (fBlocksDisconnected) {
         // If any blocks were disconnected, disconnectpool may be non empty.  Add
         // any disconnected transactions back to the mempool.
@@ -2866,7 +2889,7 @@ static void LimitValidationInterfaceQueue() LOCKS_EXCLUDED(cs_main) {
         SyncWithValidationInterfaceQueue();
     }
 }
-
+//将新区块加入到区块链上
 bool CChainState::ActivateBestChain(BlockValidationState &state, const CChainParams& chainparams, std::shared_ptr<const CBlock> pblock) {
     // Note that while we're often called here from ProcessNewBlock, this is
     // far from a guarantee. Things in the P2P/RPC will often end up calling
@@ -2895,6 +2918,7 @@ bool CChainState::ActivateBestChain(BlockValidationState &state, const CChainPar
         {
             LOCK(cs_main);
             LOCK(m_mempool.cs); // Lock transaction pool for at least as long as it takes for connectTrace to be consumed
+            //拿到当前区块链的顶点
             CBlockIndex* starting_tip = m_chain.Tip();
             bool blocks_connected = false;
             do {
@@ -2903,16 +2927,19 @@ bool CChainState::ActivateBestChain(BlockValidationState &state, const CChainPar
                 ConnectTrace connectTrace; // Destructed before cs_main is unlocked
 
                 if (pindexMostWork == nullptr) {
+                    //查找工作量最大的分支的顶点区块
                     pindexMostWork = FindMostWorkChain();
                 }
 
                 // Whether we have anything to do at all.
+                //如果区块链当前的顶点已经是最大工作量，不做任何事，返回
                 if (pindexMostWork == nullptr || pindexMostWork == m_chain.Tip()) {
                     break;
                 }
 
                 bool fInvalidFound = false;
                 std::shared_ptr<const CBlock> nullBlockPtr;
+                //将找到的工作量最大的区块加入到区块链中
                 if (!ActivateBestChainStep(state, chainparams, pindexMostWork, pblock && pblock->GetHash() == pindexMostWork->GetBlockHash() ? pblock : nullBlockPtr, fInvalidFound, connectTrace)) {
                     // A system error occurred
                     return false;
@@ -2939,6 +2966,7 @@ bool CChainState::ActivateBestChain(BlockValidationState &state, const CChainPar
             // Enqueue while holding cs_main to ensure that UpdatedBlockTip is called in the order in which blocks are connected
             if (pindexFork != pindexNewTip) {
                 // Notify ValidationInterface subscribers
+                //通知区块链更新
                 GetMainSignals().UpdatedBlockTip(pindexNewTip, pindexFork, fInitialDownload);
 
                 // Always notify the UI if a new block tip was connected
@@ -3178,7 +3206,9 @@ void CChainState::ResetBlockFailureFlags(CBlockIndex *pindex) {
 void ResetBlockFailureFlags(CBlockIndex *pindex) {
     return ::ChainstateActive().ResetBlockFailureFlags(pindex);
 }
-
+/**
+ * 将新区块添加到索引表
+*/
 CBlockIndex* BlockManager::AddToBlockIndex(const CBlockHeader& block)
 {
     AssertLockHeld(cs_main);
@@ -3186,27 +3216,37 @@ CBlockIndex* BlockManager::AddToBlockIndex(const CBlockHeader& block)
     // Check for duplicate
     uint256 hash = block.GetHash();
     BlockMap::iterator it = m_block_index.find(hash);
+    //索引表中已经有区块索引了，直接返回
     if (it != m_block_index.end())
         return it->second;
 
     // Construct new block index object
+    //为区块创建索引，并填充相关数据
     CBlockIndex* pindexNew = new CBlockIndex(block);
     // We assign the sequence id to blocks only when the full data is available,
     // to avoid miners withholding blocks but broadcasting headers, to get a
     // competitive advantage.
+    //区块的序号，初始为0，等收到区块完整的数据后再确定该区块真正的序列号，防止恶意矿工只广播区块头，而不发送完整区块获取特权
     pindexNew->nSequenceId = 0;
+    //将索引添加到索引表中
     BlockMap::iterator mi = m_block_index.insert(std::make_pair(hash, pindexNew)).first;
+    //填充区块哈希值
     pindexNew->phashBlock = &((*mi).first);
     BlockMap::iterator miPrev = m_block_index.find(block.hashPrevBlock);
     if (miPrev != m_block_index.end())
     {
+        //父区块的指针
         pindexNew->pprev = (*miPrev).second;
+        //新区块的高度
         pindexNew->nHeight = pindexNew->pprev->nHeight + 1;
         pindexNew->BuildSkip();
     }
     pindexNew->nTimeMax = (pindexNew->pprev ? std::max(pindexNew->pprev->nTimeMax, pindexNew->nTime) : pindexNew->nTime);
+    //填充新区块的累计工作量
     pindexNew->nChainWork = (pindexNew->pprev ? pindexNew->pprev->nChainWork : 0) + GetBlockProof(*pindexNew);
+    //将区块的状态升级到BLOCK_VALID_TREE
     pindexNew->RaiseValidity(BLOCK_VALID_TREE);
+    //如果新区块的累积工作量比节点收到的最大累积工作量大，更新一下pindexBestHeader全局变量
     if (pindexBestHeader == nullptr || pindexBestHeader->nChainWork < pindexNew->nChainWork)
         pindexBestHeader = pindexNew;
 
@@ -3216,26 +3256,37 @@ CBlockIndex* BlockManager::AddToBlockIndex(const CBlockHeader& block)
 }
 
 /** Mark a block as having its data received and checked (up to BLOCK_VALID_TRANSACTIONS). */
+/**
+ * 标记区块的数据已校验
+*/
 void CChainState::ReceivedBlockTransactions(const CBlock& block, CBlockIndex* pindexNew, const FlatFilePos& pos, const Consensus::Params& consensusParams)
 {
+    //填充区块信息（交易数量、磁盘文件序号等）
     pindexNew->nTx = block.vtx.size();
     pindexNew->nChainTx = 0;
     pindexNew->nFile = pos.nFile;
     pindexNew->nDataPos = pos.nPos;
     pindexNew->nUndoPos = 0;
+    //标记我们已经收到并校验了区块数据
     pindexNew->nStatus |= BLOCK_HAVE_DATA;
     if (IsWitnessEnabled(pindexNew->pprev, consensusParams)) {
         pindexNew->nStatus |= BLOCK_OPT_WITNESS;
     }
+    //区块状态升级为BLOCK_VALID_TRANSACTIONS
     pindexNew->RaiseValidity(BLOCK_VALID_TRANSACTIONS);
     setDirtyBlockIndex.insert(pindexNew);
 
     if (pindexNew->pprev == nullptr || pindexNew->pprev->HaveTxsDownloaded()) {
         // If pindexNew is the genesis block or all parents are BLOCK_VALID_TRANSACTIONS.
+        //如果是创世区块或者区块的父区块的状态为BLOCK_VALID_TRANSACTIONS,进入此分支（对于
+        //本地挖到的新区块，其父区块一定满足该条件，所以会进入该分支）
         std::deque<CBlockIndex*> queue;
         queue.push_back(pindexNew);
 
         // Recursively process any descendant blocks that now may be eligible to be connected.
+        //这里会递归处理mapBlockUnlinked，假设当前mapBlockUnlinked中存在B->C,B->D
+        //此时收到了B区块的完整区块，pindexNew指向B区块
+        //这里会从mapBlockUnlinked中递归删除B->C,B->D，并且将BCD加入候选集合setBlockIndexCandidates中
         while (!queue.empty()) {
             CBlockIndex *pindex = queue.front();
             queue.pop_front();
@@ -3244,9 +3295,11 @@ void CChainState::ReceivedBlockTransactions(const CBlock& block, CBlockIndex* pi
                 LOCK(cs_nBlockSequenceId);
                 pindex->nSequenceId = nBlockSequenceId++;
             }
+            //对比和区块链顶点区块的工作量，必顶点区块工作量大的区块，加入到候选区块集合中
             if (m_chain.Tip() == nullptr || !setBlockIndexCandidates.value_comp()(pindex, m_chain.Tip())) {
                 setBlockIndexCandidates.insert(pindex);
             }
+            //从maoBlocksUnlinked中递归删除
             std::pair<std::multimap<CBlockIndex*, CBlockIndex*>::iterator, std::multimap<CBlockIndex*, CBlockIndex*>::iterator> range = m_blockman.m_blocks_unlinked.equal_range(pindex);
             while (range.first != range.second) {
                 std::multimap<CBlockIndex*, CBlockIndex*>::iterator it = range.first;
@@ -3256,6 +3309,14 @@ void CChainState::ReceivedBlockTransactions(const CBlock& block, CBlockIndex* pi
             }
         }
     } else {
+        //如果节点的父区块只有区块头，还未收到完整区块，则加入mapBlocksUnlinked
+        /**
+         *   (i)  如果收到了区块C的完整区块，但是它的父区块B只有区块头，则会在mapBlocksUnlinked表中添加一项B->C，表示新区块C已经有完整数据，但其父区块尚不完整；
+
+             (ii) 假设当前mapBlocksUnlinked表中包含B->C， B->D，也就是说收到了B，C，D的区块头，其中区块C和区块D都以区块B为父区块（区块链分叉，比如两个矿工在几乎同一时间挖出了C和D），然后节点收到了C和D的完整区块，此时mapBlocksUnlinked中就会存在B->C，B->D两项。一段时间后收到了B区块的完整区块，此时将B->C和B->D移除，并且将B、C、D加入到setBlockIndexCandiates中作为候选区块；
+————————————————
+            原文链接：https://blog.csdn.net/ztemt_sw2/article/details/80958087
+        */
         if (pindexNew->pprev && pindexNew->pprev->IsValid(BLOCK_VALID_TREE)) {
             m_blockman.m_blocks_unlinked.insert(std::make_pair(pindexNew->pprev, pindexNew));
         }
@@ -3346,7 +3407,9 @@ static bool CheckBlockHeader(const CBlockHeader& block, BlockValidationState& st
 
     return true;
 }
-
+/**
+ * 区块检查
+*/
 bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW, bool fCheckMerkleRoot)
 {
     // These are checks that are independent of context.
@@ -3356,6 +3419,7 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
 
     // Check that the header is valid (particularly PoW).  This is mostly
     // redundant with the call in AcceptBlockHeader.
+    //检查区块的工作量是否ok
     if (!CheckBlockHeader(block, state, consensusParams, fCheckPOW))
         return false;
 
@@ -3365,6 +3429,7 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
     }
 
     // Check the merkle root.
+    //检查区块的merkel树的hash值是否一致（确保交易没被篡改过）
     if (fCheckMerkleRoot) {
         bool mutated;
         uint256 hashMerkleRoot2 = BlockMerkleRoot(block, &mutated);
@@ -3385,10 +3450,12 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
     // checks that use witness data may be performed here.
 
     // Size limits
+    //区块中交易的数量是否满足条件
     if (block.vtx.empty() || block.vtx.size() * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT || ::GetSerializeSize(block, PROTOCOL_VERSION | SERIALIZE_TRANSACTION_NO_WITNESS) * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT)
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-length", "size limits failed");
 
     // First transaction must be coinbase, the rest must not be
+    //第一笔交易必须是coinbase交易，且只能有一笔coinbase交易
     if (block.vtx.empty() || !block.vtx[0]->IsCoinBase())
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-missing", "first tx is not coinbase");
     for (unsigned int i = 1; i < block.vtx.size(); i++)
@@ -3397,6 +3464,7 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
 
     // Check transactions
     // Must check for duplicate inputs (see CVE-2018-17144)
+    //检查每一笔交易
     for (const auto& tx : block.vtx) {
         TxValidationState tx_state;
         if (!CheckTransaction(*tx, tx_state)) {
@@ -3621,17 +3689,20 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
 
     return true;
 }
-
+/**校验区块头*/
 bool BlockManager::AcceptBlockHeader(const CBlockHeader& block, BlockValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex)
 {
     AssertLockHeld(cs_main);
     // Check for duplicate
+    //新区块的区块哈希值
     uint256 hash = block.GetHash();
+    //检索mapBlockIndex索引表，看区块的索引是否已经在表中
     BlockMap::iterator miSelf = m_block_index.find(hash);
     CBlockIndex *pindex = nullptr;
-    if (hash != chainparams.GetConsensus().hashGenesisBlock) {
+    if (hash != chainparams.GetConsensus().hashGenesisBlock) {//非创世区块
         if (miSelf != m_block_index.end()) {
             // Block header is already known.
+            //索引表中已经有区块的索引信息了，返回
             pindex = miSelf->second;
             if (ppindex)
                 *ppindex = pindex;
@@ -3641,13 +3712,14 @@ bool BlockManager::AcceptBlockHeader(const CBlockHeader& block, BlockValidationS
             }
             return true;
         }
-
+        //检查区块的工作量是否OK
         if (!CheckBlockHeader(block, state, chainparams.GetConsensus())) {
             LogPrint(BCLog::VALIDATION, "%s: Consensus::CheckBlockHeader: %s, %s\n", __func__, hash.ToString(), state.ToString());
             return false;
         }
 
         // Get prev block index
+        //从索引表中查找父区块的索引信息，如果没有父区块的索引，则出错返回
         CBlockIndex* pindexPrev = nullptr;
         BlockMap::iterator mi = m_block_index.find(block.hashPrevBlock);
         if (mi == m_block_index.end()) {
@@ -3655,6 +3727,7 @@ bool BlockManager::AcceptBlockHeader(const CBlockHeader& block, BlockValidationS
             return state.Invalid(BlockValidationResult::BLOCK_MISSING_PREV, "prev-blk-not-found");
         }
         pindexPrev = (*mi).second;
+        //父区块有问题，出错返回
         if (pindexPrev->nStatus & BLOCK_FAILED_MASK) {
             LogPrintf("ERROR: %s: prev block invalid\n", __func__);
             return state.Invalid(BlockValidationResult::BLOCK_INVALID_PREV, "bad-prevblk");
@@ -3701,6 +3774,7 @@ bool BlockManager::AcceptBlockHeader(const CBlockHeader& block, BlockValidationS
             }
         }
     }
+    //为新区块创建索引，并添加到索引表中
     if (pindex == nullptr)
         pindex = AddToBlockIndex(block);
 
@@ -3739,6 +3813,9 @@ bool ChainstateManager::ProcessNewBlockHeaders(const std::vector<CBlockHeader>& 
 }
 
 /** Store block on disk. If dbp is non-nullptr, the file is known to already reside on disk */
+/**
+ * 将区块数据存盘
+*/
 static FlatFilePos SaveBlockToDisk(const CBlock& block, int nHeight, const CChainParams& chainparams, const FlatFilePos* dbp) {
     unsigned int nBlockSize = ::GetSerializeSize(block, CLIENT_VERSION);
     FlatFilePos blockPos;
@@ -3758,6 +3835,9 @@ static FlatFilePos SaveBlockToDisk(const CBlock& block, int nHeight, const CChai
 }
 
 /** Store block on disk. If dbp is non-nullptr, the file is known to already reside on disk */
+/**
+ * 区块存盘
+*/
 bool CChainState::AcceptBlock(const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, const CChainParams& chainparams, CBlockIndex** ppindex, bool fRequested, const FlatFilePos* dbp, bool* fNewBlock)
 {
     const CBlock& block = *pblock;
@@ -3767,23 +3847,25 @@ bool CChainState::AcceptBlock(const std::shared_ptr<const CBlock>& pblock, Block
 
     CBlockIndex *pindexDummy = nullptr;
     CBlockIndex *&pindex = ppindex ? *ppindex : pindexDummy;
-
+        //校验区块头，找到区块索引（CBlockIndex），没有就创建一个并加入到mapBlocksIndex映射表中
     bool accepted_header = m_blockman.AcceptBlockHeader(block, state, chainparams, &pindex);
     CheckBlockIndex(chainparams.GetConsensus());
-
     if (!accepted_header)
         return false;
 
     // Try to process all requested blocks that we don't have, but only
     // process an unrequested block if it's new and has enough work to
     // advance our tip, and isn't too many blocks ahead.
+    //区块的数据是否已经在磁盘上
     bool fAlreadyHave = pindex->nStatus & BLOCK_HAVE_DATA;
+    //新区快是否有更多的工作量
     bool fHasMoreOrSameWork = (m_chain.Tip() ? pindex->nChainWork >= m_chain.Tip()->nChainWork : true);
     // Blocks that are too out-of-order needlessly limit the effectiveness of
     // pruning, because pruning will not delete block files that contain any
     // blocks which are too close in height to the tip.  Apply this test
     // regardless of whether pruning is enabled; it should generally be safe to
     // not process unrequested blocks.
+    //是否是一个相隔当前区块链顶点区块太远的区块
     bool fTooFarAhead = (pindex->nHeight > int(m_chain.Height() + MIN_BLOCKS_TO_KEEP));
 
     // TODO: Decouple this function from the block download logic by removing fRequested
@@ -3793,10 +3875,15 @@ bool CChainState::AcceptBlock(const std::shared_ptr<const CBlock>& pblock, Block
 
     // TODO: deal better with return value and error conditions for duplicate
     // and unrequested blocks.
+    //如果区块数据已经在磁盘上了，忽略随后的操作直接返回
     if (fAlreadyHave) return true;
+    //如果不是从网络收到的新区快（新构造的区块）
     if (!fRequested) {  // If we didn't ask for it:
+        //区块之前已经处理过，忽略
         if (pindex->nTx != 0) return true;    // This is a previously-processed block that was pruned
+        //工作量不够，忽略
         if (!fHasMoreOrSameWork) return true; // Don't process less-work chains
+        //太远的区块，忽略
         if (fTooFarAhead) return true;        // Block height is too high
 
         // Protect against DoS attacks from low-work chains.
@@ -3805,7 +3892,7 @@ bool CChainState::AcceptBlock(const std::shared_ptr<const CBlock>& pblock, Block
         // request; don't process these.
         if (pindex->nChainWork < nMinimumChainWork) return true;
     }
-
+    //检查区块，如果区块有问题，将区块的状态标记为无效（BLOCK_FAILED_VALID）,并且加入到脏区块集合中
     if (!CheckBlock(block, state, chainparams.GetConsensus()) ||
         !ContextualCheckBlock(block, state, chainparams.GetConsensus(), pindex->pprev)) {
         if (state.IsInvalid() && state.GetResult() != BlockValidationResult::BLOCK_MUTATED) {
@@ -3818,16 +3905,18 @@ bool CChainState::AcceptBlock(const std::shared_ptr<const CBlock>& pblock, Block
     // Header is valid/has work, merkle tree and segwit merkle tree are good...RELAY NOW
     // (but if it does not build on our best tip, let the SendMessages loop relay it)
     if (!IsInitialBlockDownload() && m_chain.Tip() == pindex->pprev)
-        GetMainSignals().NewPoWValidBlock(pindex, pblock);
+        GetMainSignals().NewPoWValidBlock(pindex, pblock);//区块头广播到网络中
 
     // Write block to history file
     if (fNewBlock) *fNewBlock = true;
     try {
+        //将区块存储到磁盘上
         FlatFilePos blockPos = SaveBlockToDisk(block, pindex->nHeight, chainparams, dbp);
         if (blockPos.IsNull()) {
             state.Error(strprintf("%s: Failed to find position to write new block to disk", __func__));
             return false;
         }
+        //标记区块的数据已经接收并且检查过了（区块的状态更新为BLOCK_VALID_TRANSACTIONS）
         ReceivedBlockTransactions(block, pindex, blockPos, chainparams.GetConsensus());
     } catch (const std::runtime_error& e) {
         return AbortNode(state, std::string("System error: ") + e.what());
@@ -3839,7 +3928,12 @@ bool CChainState::AcceptBlock(const std::shared_ptr<const CBlock>& pblock, Block
 
     return true;
 }
-
+  /**
+     * 处理新区块
+     * 1.检查区块
+     * 2.区块数据存入磁盘
+     * 3.将新区块加入区块链
+    */
 bool ChainstateManager::ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<const CBlock> pblock, bool fForceProcessing, bool* fNewBlock)
 {
     AssertLockNotHeld(cs_main);
@@ -3855,9 +3949,11 @@ bool ChainstateManager::ProcessNewBlock(const CChainParams& chainparams, const s
 
         // Ensure that CheckBlock() passes before calling AcceptBlock, as
         // belt-and-suspenders.
+        //先对区块进行检查
         bool ret = CheckBlock(*pblock, state, chainparams.GetConsensus());
         if (ret) {
             // Store to disk
+            //一系列的操作，确认区块是否合法，将区块存入磁盘
             ret = ::ChainstateActive().AcceptBlock(pblock, state, chainparams, &pindex, fForceProcessing, nullptr, fNewBlock);
         }
         if (!ret) {
@@ -3865,10 +3961,11 @@ bool ChainstateManager::ProcessNewBlock(const CChainParams& chainparams, const s
             return error("%s: AcceptBlock FAILED (%s)", __func__, state.ToString());
         }
     }
-
+    //通知UI
     NotifyHeaderTip();
 
     BlockValidationState state; // Only used to report errors, not invalidity - ignore it
+    //将新区块加入到本地区块链，延长本地最长链
     if (!::ChainstateActive().ActivateBestChain(state, chainparams, pblock))
         return error("%s: ActivateBestChain failed (%s)", __func__, state.ToString());
 
@@ -4656,6 +4753,7 @@ bool CChainState::LoadGenesisBlock(const CChainParams& chainparams)
         if (blockPos.IsNull())
             return error("%s: writing genesis block to disk failed", __func__);
         CBlockIndex *pindex = m_blockman.AddToBlockIndex(block);
+        //标记区块的数据已经接收并且检查过了（区块的状态更新为BLOCK_VALID_TRANSACTIONS）
         ReceivedBlockTransactions(block, pindex, blockPos, chainparams.GetConsensus());
     } catch (const std::runtime_error& e) {
         return error("%s: failed to write genesis block: %s", __func__, e.what());

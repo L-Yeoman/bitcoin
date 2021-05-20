@@ -58,7 +58,10 @@ public:
     }
 };
 
-
+/**
+ * 继承自CBlockHeader，CBlockHeader包含区块头的数据
+ * CBlock是纯数据，区块的交易数据和区块头
+*/
 class CBlock : public CBlockHeader
 {
 public:

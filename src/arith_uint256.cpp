@@ -200,10 +200,14 @@ template unsigned int base_uint<256>::bits() const;
 
 // This implementation directly uses shifts instead of going
 // through an intermediate MPI representation.
+/**难度值的计算*/
 arith_uint256& arith_uint256::SetCompact(uint32_t nCompact, bool* pfNegative, bool* pfOverflow)
 {
+    //nBit右移三个字节，得到幂p
     int nSize = nCompact >> 24;
+    //计算系数
     uint32_t nWord = nCompact & 0x007fffff;
+    //幂p<=3的需要调整下，否则幂就是8*（p-3）
     if (nSize <= 3) {
         nWord >>= 8 * (3 - nSize);
         *this = nWord;
@@ -219,7 +223,6 @@ arith_uint256& arith_uint256::SetCompact(uint32_t nCompact, bool* pfNegative, bo
                                      (nWord > 0xffff && nSize > 32));
     return *this;
 }
-
 uint32_t arith_uint256::GetCompact(bool fNegative) const
 {
     int nSize = (bits() + 7) / 8;

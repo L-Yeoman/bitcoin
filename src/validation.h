@@ -136,6 +136,7 @@ extern uint256 hashAssumeValid;
 extern arith_uint256 nMinimumChainWork;
 
 /** Best header we've seen so far (used for getheaders queries' starting points). */
+//这是一个全局变量，指向当前具有最大工作量的区块
 extern CBlockIndex *pindexBestHeader;
 
 /** Pruning-related variables and constants */
@@ -584,6 +585,9 @@ public:
      * as good as our current tip or better. Entries may be failed, though, and pruning nodes may be
      * missing the data for the block.
      */
+    //这是一个集合，集合中包含了所有比区块链当前顶点工作量更多的区块的集合，意思是当前区块的下一个区块
+    //也是候选区块，只是在收到区块头以后对区块的额工作量证明做了校验
+    //区块能否用来延长区块链，需要等收到区块的完整数据以后确定
     std::set<CBlockIndex*, CBlockIndexWorkComparator> setBlockIndexCandidates;
 
     //! @returns A reference to the in-memory cache of the UTXO set.
@@ -911,6 +915,7 @@ public:
      * @param[out]  fNewBlock A boolean which is set to indicate if the block was first received via this call
      * @returns     If the block was processed, independently of block validity
      */
+  
     bool ProcessNewBlock(const CChainParams& chainparams, const std::shared_ptr<const CBlock> pblock, bool fForceProcessing, bool* fNewBlock) LOCKS_EXCLUDED(cs_main);
 
     /**

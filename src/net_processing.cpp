@@ -1277,12 +1277,16 @@ static bool fWitnessesPresentInMostRecentCompactBlock GUARDED_BY(cs_most_recent_
  * Maintain state about the best-seen block and fast-announce a compact block
  * to compatible peers.
  */
+/**
+ * 将区块头广播出去
+*/
 void PeerManager::NewPoWValidBlock(const CBlockIndex *pindex, const std::shared_ptr<const CBlock>& pblock) {
+    //将区块头、区块交易id打包到CBlockHeaderAndShortTxIDs中
     std::shared_ptr<const CBlockHeaderAndShortTxIDs> pcmpctblock = std::make_shared<const CBlockHeaderAndShortTxIDs> (*pblock, true);
     const CNetMsgMaker msgMaker(PROTOCOL_VERSION);
 
     LOCK(cs_main);
-
+    //更新相关数据
     static int nHighestFastAnnounce = 0;
     if (pindex->nHeight <= nHighestFastAnnounce)
         return;
@@ -1298,7 +1302,8 @@ void PeerManager::NewPoWValidBlock(const CBlockIndex *pindex, const std::shared_
         most_recent_compact_block = pcmpctblock;
         fWitnessesPresentInMostRecentCompactBlock = fWitnessEnabled;
     }
-
+//对所有相邻的节点发送CMPCTBLOCK消息，将区块头广播出去
+//之所以不广播完整区块，是为了节省带宽
     m_connman.ForEachNode([this, &pcmpctblock, pindex, &msgMaker, fWitnessEnabled, &hashBlock](CNode* pnode) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
         AssertLockHeld(::cs_main);
 
@@ -3394,14 +3399,14 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
         bool fBlockRead = false;
         {
             LOCK(cs_main);
-
+            //从队列中找到消息中指定的区块对应的QueuedBlock,没找到则返回
             std::map<uint256, std::pair<NodeId, std::list<QueuedBlock>::iterator> >::iterator it = mapBlocksInFlight.find(resp.blockhash);
             if (it == mapBlocksInFlight.end() || !it->second.second->partialBlock ||
                     it->second.first != pfrom.GetId()) {
                 LogPrint(BCLog::NET, "Peer %d sent us block transactions for block we weren't expecting\n", pfrom.GetId());
                 return;
             }
-
+            //填充交易信息
             PartiallyDownloadedBlock& partialBlock = *it->second.second->partialBlock;
             ReadStatus status = partialBlock.FillBlock(*pblock, resp.txn);
             if (status == READ_STATUS_INVALID) {
@@ -3431,6 +3436,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
                 // though the block was successfully read, and rely on the
                 // handling in ProcessNewBlock to ensure the block index is
                 // updated, etc.
+                //区块没问题，标记区块的交易已经收到，将区块对应的QueuedBlock从队列中移除掉
                 MarkBlockAsReceived(resp.blockhash); // it is now an empty pointer
                 fBlockRead = true;
                 // mapBlockSource is used for potentially punishing peers and
@@ -3442,6 +3448,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
                 mapBlockSource.emplace(resp.blockhash, std::make_pair(pfrom.GetId(), false));
             }
         } // Don't hold cs_main when we call into ProcessNewBlock
+        //如果正确的将收到的交易填充到区块中，调用ProcessNewBlock处理
         if (fBlockRead) {
             bool fNewBlock = false;
             // Since we requested this block (it was in mapBlocksInFlight), force it to be processed,
@@ -3450,6 +3457,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
             // disk-space attacks), but this should be safe due to the
             // protections in the compact block handler -- see related comment
             // in compact block optimistic reconstruction handling.
+            //处理新区快
             m_chainman.ProcessNewBlock(m_chainparams, pblock, /*fForceProcessing=*/true, &fNewBlock);
             if (fNewBlock) {
                 pfrom.nLastBlockTime = GetTime();

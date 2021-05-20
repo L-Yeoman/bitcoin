@@ -88,6 +88,10 @@ struct Params {
     bool fPowNoRetargeting;
     int64_t nPowTargetSpacing;
     int64_t nPowTargetTimespan;
+    //系统是以2016个区块为一个周期来自动进行难度调整的，这个周期值根据如下方法确定
+    //consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
+    //consensus.nPowTargetSpacing = 10 * 60;
+    //nPowTargetTimeSpan/nPowTargetSpacing=2016
     int64_t DifficultyAdjustmentInterval() const { return nPowTargetTimespan / nPowTargetSpacing; }
     /** The best chain should have at least this much work */
     uint256 nMinimumChainWork;

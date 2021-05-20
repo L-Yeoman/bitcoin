@@ -52,8 +52,10 @@ const CBlockIndex *CChain::FindFork(const CBlockIndex *pindex) const {
     if (pindex == nullptr) {
         return nullptr;
     }
+    //找到分支上和当前主链的顶点区块高度相同的区块P
     if (pindex->nHeight > Height())
         pindex = pindex->GetAncestor(Height());
+        //从上一步找到的区块P开始向前回溯，直到找到一个存在于当前主链上的区块为止
     while (pindex && !Contains(pindex))
         pindex = pindex->pprev;
     return pindex;
