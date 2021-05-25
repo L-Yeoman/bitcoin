@@ -428,6 +428,14 @@ static bool EvalChecksig(const valtype& sig, const valtype& pubkey, CScript::con
     assert(false);
 }
 
+/**
+ * stack 输出的参数，脚本执行的堆栈
+ * script 要解释的脚本
+ * flags  校验相关的标识
+ * checker 用于校验交易的签名
+ * serror  存放错误信息
+ * EvalScript在执行时，会从头一次开始解析输入脚本，并根据不同的操作符更改堆栈
+*/
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* serror)
 {
     static const CScriptNum bnZero(0);
@@ -1950,20 +1958,25 @@ bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const C
 
     // scriptSig and scriptPubKey must be evaluated sequentially on the same stack
     // rather than being simply concatenated (see CVE-2010-5141)
+    //堆栈
     std::vector<std::vector<unsigned char> > stack, stackCopy;
+    //解析并执行解锁脚本，如果解析过程中出错则返回，执行完后堆栈中将保存公钥和签名
     if (!EvalScript(stack, scriptSig, flags, checker, SigVersion::BASE, serror))
         // serror is set
         return false;
     if (flags & SCRIPT_VERIFY_P2SH)
         stackCopy = stack;
+        //继续解析执行锁定脚本
     if (!EvalScript(stack, scriptPubKey, flags, checker, SigVersion::BASE, serror))
         // serror is set
         return false;
+        //如果堆栈最终为空，则说明错误，返回
     if (stack.empty())
         return set_error(serror, SCRIPT_ERR_EVAL_FALSE);
+        //堆栈中拿出脚本运行的结果
     if (CastToBool(stack.back()) == false)
         return set_error(serror, SCRIPT_ERR_EVAL_FALSE);
-
+    //其他一些交易类型的处理
     // Bare witness programs
     int witnessversion;
     std::vector<unsigned char> witnessprogram;

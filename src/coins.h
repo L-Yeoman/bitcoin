@@ -26,17 +26,22 @@
  * Serialized format:
  * - VARINT((coinbase ? 1 : 0) | (height << 1))
  * - the non-spent CTxOut (via TxOutCompression)
+ * Coin封装了Utxo
+ * 比特币钱包实际上就是一个由Coin构成的DB，Bitcoind在启动的时候会从DB加载Coin并存放内存
  */
 class Coin
 {
 public:
     //! unspent transaction output
+    //UTXO对应的急交易输出
     CTxOut out;
 
     //! whether containing transaction was a coinbase
+    //该UTXO是否是coinbase交易
     unsigned int fCoinBase : 1;
 
     //! at which height this containing transaction was included in the active block chain
+    //包含该UTXO的交易所在区块在区块链上的高度
     uint32_t nHeight : 31;
 
     //! construct a Coin from a CTxOut and height/coinbase information.

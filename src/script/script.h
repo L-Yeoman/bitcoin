@@ -400,7 +400,11 @@ typedef prevector<28, unsigned char> CScriptBase;
 
 bool GetScriptOp(CScriptBase::const_iterator& pc, CScriptBase::const_iterator end, opcodetype& opcodeRet, std::vector<unsigned char>* pvchRet);
 
-/** Serialized script, used inside transaction inputs and outputs */
+/**
+ *  交易输入的解锁脚本scriptSig和交易输出的scriptPubKey都是CScript类型，用来表示脚本交易
+ * 其中CScriptBase实际上是一个自定义的vector，重写了<<操作符，可以很方便的向向量中添加数据
+ *  Serialized script, used inside transaction inputs and outputs */
+
 class CScript : public CScriptBase
 {
 protected:

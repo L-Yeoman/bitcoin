@@ -18,6 +18,7 @@ MutableTransactionSignatureCreator::MutableTransactionSignatureCreator(const CMu
 
 bool MutableTransactionSignatureCreator::CreateSig(const SigningProvider& provider, std::vector<unsigned char>& vchSig, const CKeyID& address, const CScript& scriptCode, SigVersion sigversion) const
 {
+    //从keystore中拿到公钥对应的私钥
     CKey key;
     if (!provider.GetKey(address, key))
         return false;
@@ -25,8 +26,9 @@ bool MutableTransactionSignatureCreator::CreateSig(const SigningProvider& provid
     // Signing with uncompressed keys is disabled in witness scripts
     if (sigversion == SigVersion::WITNESS_V0 && !key.IsCompressed())
         return false;
-
+    //对交易生成hash摘要
     uint256 hash = SignatureHash(scriptCode, *txTo, nIn, nHashType, amount, sigversion);
+    //用私钥对交易的hash摘要进行数字签名，签名保存在输出参数vchSig中
     if (!key.Sign(hash, vchSig))
         return false;
     vchSig.push_back((unsigned char)nHashType);
@@ -104,8 +106,9 @@ static bool SignStep(const SigningProvider& provider, const BaseSignatureCreator
     std::vector<unsigned char> sig;
 
     std::vector<valtype> vSolutions;
+    //解析交易输入引用的UTXO的锁定脚本，锁定脚本的数据存放在向量vSolutions
     whichTypeRet = Solver(scriptPubKey, vSolutions);
-
+    //根据不同的锁定脚本的类型执行签名
     switch (whichTypeRet)
     {
     case TxoutType::NONSTANDARD:
@@ -113,11 +116,11 @@ static bool SignStep(const SigningProvider& provider, const BaseSignatureCreator
     case TxoutType::WITNESS_UNKNOWN:
     case TxoutType::WITNESS_V1_TAPROOT:
         return false;
-    case TxoutType::PUBKEY:
+    case TxoutType::PUBKEY: //锁定脚本是P2PK类型
         if (!CreateSig(creator, sigdata, provider, sig, CPubKey(vSolutions[0]), scriptPubKey, sigversion)) return false;
         ret.push_back(std::move(sig));
         return true;
-    case TxoutType::PUBKEYHASH: {
+    case TxoutType::PUBKEYHASH: { //锁定脚本是P2PKH类型
         CKeyID keyID = CKeyID(uint160(vSolutions[0]));
         CPubKey pubkey;
         if (!GetPubKey(provider, sigdata, keyID, pubkey)) {
@@ -130,7 +133,7 @@ static bool SignStep(const SigningProvider& provider, const BaseSignatureCreator
         ret.push_back(ToByteVector(pubkey));
         return true;
     }
-    case TxoutType::SCRIPTHASH:
+    case TxoutType::SCRIPTHASH: //锁定脚本是P2SH类型
         h160 = uint160(vSolutions[0]);
         if (GetCScript(provider, sigdata, CScriptID{h160}, scriptRet)) {
             ret.push_back(std::vector<unsigned char>(scriptRet.begin(), scriptRet.end()));
@@ -140,7 +143,7 @@ static bool SignStep(const SigningProvider& provider, const BaseSignatureCreator
         sigdata.missing_redeem_script = h160;
         return false;
 
-    case TxoutType::MULTISIG: {
+    case TxoutType::MULTISIG: { //锁定脚本是P2WSH类型
         size_t required = vSolutions.front()[0];
         ret.push_back(valtype()); // workaround CHECKMULTISIG bug
         for (size_t i = 1; i < vSolutions.size() - 1; ++i) {
@@ -202,11 +205,18 @@ bool ProduceSignature(const SigningProvider& provider, const BaseSignatureCreato
 
     std::vector<valtype> result;
     TxoutType whichType;
+    //进行签名
+    /**
+     * provider:keystore,存放了公钥-私钥对
+     * creator:BaseSignatureCreator类型的实例，用于最后对交易生成签名
+     * fromPubKey:CScript类型，交易输入引用的UTXO的锁定脚本
+     * sigData:SignatureData类型，是输出的参数，用于存放生成的解锁脚本
+    */
     bool solved = SignStep(provider, creator, fromPubKey, result, whichType, SigVersion::BASE, sigdata);
     bool P2SH = false;
     CScript subscript;
     sigdata.scriptWitness.stack.clear();
-
+    //P2SH交易，需要对子脚本进行签名
     if (solved && whichType == TxoutType::SCRIPTHASH)
     {
         // Solver returns the subscript that needs to be evaluated;
@@ -217,7 +227,7 @@ bool ProduceSignature(const SigningProvider& provider, const BaseSignatureCreato
         solved = solved && SignStep(provider, creator, subscript, result, whichType, SigVersion::BASE, sigdata) && whichType != TxoutType::SCRIPTHASH;
         P2SH = true;
     }
-
+    //P2WKH交易，需要对见证脚本签名
     if (solved && whichType == TxoutType::WITNESS_V0_KEYHASH)
     {
         CScript witnessscript;
@@ -228,6 +238,7 @@ bool ProduceSignature(const SigningProvider& provider, const BaseSignatureCreato
         sigdata.witness = true;
         result.clear();
     }
+    //P2WSH交易
     else if (solved && whichType == TxoutType::WITNESS_V0_SCRIPTHASH)
     {
         CScript witnessscript(result[0].begin(), result[0].end());
@@ -245,9 +256,11 @@ bool ProduceSignature(const SigningProvider& provider, const BaseSignatureCreato
     if (P2SH) {
         result.push_back(std::vector<unsigned char>(subscript.begin(), subscript.end()));
     }
+    //将生成的解锁脚本写入到sigdata中
     sigdata.scriptSig = PushAll(result);
 
     // Test solution
+    //校验脚本
     sigdata.complete = solved && VerifyScript(sigdata.scriptSig, fromPubKey, &sigdata.scriptWitness, STANDARD_SCRIPT_VERIFY_FLAGS, creator.Checker());
     return sigdata.complete;
 }
@@ -468,7 +481,9 @@ bool IsSegWitOutput(const SigningProvider& provider, const CScript& script)
     }
     return false;
 }
-
+/**
+ * 签名方法
+*/
 bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, const std::map<COutPoint, Coin>& coins, int nHashType, std::map<int, std::string>& input_errors)
 {
     bool fHashSingle = ((nHashType & ~SIGHASH_ANYONECANPAY) == SIGHASH_SINGLE);
@@ -477,22 +492,26 @@ bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, 
     // transaction to avoid rehashing.
     const CTransaction txConst(mtx);
     // Sign what we can:
+    //对交易输入生成签名
     for (unsigned int i = 0; i < mtx.vin.size(); i++) {
+        //找到交易输入指向的utxo
         CTxIn& txin = mtx.vin[i];
         auto coin = coins.find(txin.prevout);
         if (coin == coins.end() || coin->second.IsSpent()) {
             input_errors[i] = "Input not found or already spent";
             continue;
         }
+        //拿到输入指向的utxo的脚本
         const CScript& prevPubKey = coin->second.out.scriptPubKey;
         const CAmount& amount = coin->second.out.nValue;
 
         SignatureData sigdata = DataFromTransaction(mtx, i, coin->second.out);
         // Only sign SIGHASH_SINGLE if there's a corresponding output:
+        //生成交易的解锁脚本，存放在sigdata中
         if (!fHashSingle || (i < mtx.vout.size())) {
             ProduceSignature(*keystore, MutableTransactionSignatureCreator(&mtx, i, amount, nHashType), prevPubKey, sigdata);
         }
-
+        //将生成的解锁脚本填充到交易输入中
         UpdateInput(txin, sigdata);
 
         // amount must be specified for valid segwit signature
@@ -502,6 +521,7 @@ bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, 
         }
 
         ScriptError serror = SCRIPT_ERR_OK;
+        //校验脚本
         if (!VerifyScript(txin.scriptSig, prevPubKey, &txin.scriptWitness, STANDARD_SCRIPT_VERIFY_FLAGS, TransactionSignatureChecker(&txConst, i, amount), &serror)) {
             if (serror == SCRIPT_ERR_INVALID_STACK_OPERATION) {
                 // Unable to sign input and verification failed (possible attempt to partially sign).

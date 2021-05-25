@@ -370,6 +370,7 @@ static RPCHelpMan verifytxoutproof()
 
 static RPCHelpMan createrawtransaction()
 {
+    //输入参数不合法，抛出异常，提示参数格式
     return RPCHelpMan{"createrawtransaction",
                 "\nCreate a transaction spending the given inputs and creating new outputs.\n"
                 "Outputs can be addresses or data.\n"
@@ -420,6 +421,7 @@ static RPCHelpMan createrawtransaction()
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
+    //检查参数
     RPCTypeCheck(request.params, {
         UniValue::VARR,
         UniValueType(), // ARR or OBJ, checked later
@@ -432,8 +434,9 @@ static RPCHelpMan createrawtransaction()
     if (!request.params[3].isNull()) {
         rbf = request.params[3].isTrue();
     }
+    //生成交易对象
     CMutableTransaction rawTx = ConstructTransaction(request.params[0], request.params[1], request.params[2], rbf);
-
+    //对交易进行编码并返回
     return EncodeHexTx(CTransaction(rawTx));
 },
     };
@@ -714,7 +717,9 @@ static RPCHelpMan combinerawtransaction()
 },
     };
 }
-
+/**
+ * 通过私钥进行签名
+*/
 static RPCHelpMan signrawtransactionwithkey()
 {
     return RPCHelpMan{"signrawtransactionwithkey",
@@ -778,12 +783,12 @@ static RPCHelpMan signrawtransactionwithkey()
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
     RPCTypeCheck(request.params, {UniValue::VSTR, UniValue::VARR, UniValue::VARR, UniValue::VSTR}, true);
-
+    //解码出原始交易
     CMutableTransaction mtx;
     if (!DecodeHexTx(mtx, request.params[0].get_str())) {
         throw JSONRPCError(RPC_DESERIALIZATION_ERROR, "TX decode failed. Make sure the tx has at least one input.");
     }
-
+    //从提供的私钥得到对应的公钥，并将私钥-公钥对保存在keystore中
     FillableSigningProvider keystore;
     const UniValue& keys = request.params[1].get_array();
     for (unsigned int idx = 0; idx < keys.size(); ++idx) {
@@ -807,12 +812,18 @@ static RPCHelpMan signrawtransactionwithkey()
     ParsePrevouts(request.params[2], &keystore, coins);
 
     UniValue result(UniValue::VOBJ);
+    //对交易进行签名，生成解锁脚本scriptSig
     SignTransaction(mtx, &keystore, coins, request.params[3], result);
     return result;
 },
     };
 }
-
+/**
+ * 广播交易
+ * 只有交易在交易池中不存在，并且交易的每一笔输出都未被花费，
+ * 才能将交易添加到交易池中。
+ * 最后生成一个INV消息加入到集合当中，等待广播到网络中
+*/
 static RPCHelpMan sendrawtransaction()
 {
     return RPCHelpMan{"sendrawtransaction",
@@ -846,7 +857,7 @@ static RPCHelpMan sendrawtransaction()
         UniValue::VSTR,
         UniValueType(), // VNUM or VSTR, checked inside AmountFromValue()
     });
-
+    //解码出交易
     CMutableTransaction mtx;
     if (!DecodeHexTx(mtx, request.params[0].get_str())) {
         throw JSONRPCError(RPC_DESERIALIZATION_ERROR, "TX decode failed. Make sure the tx has at least one input.");

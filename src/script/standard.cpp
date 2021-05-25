@@ -113,13 +113,14 @@ TxoutType Solver(const CScript& scriptPubKey, std::vector<std::vector<unsigned c
 
     // Shortcut for pay-to-script-hash, which are more constrained than the other types:
     // it is always OP_HASH160 20 [20 byte hash] OP_EQUAL
+    //锁定脚本是P2SH类型，这种类型的锁定脚本的格式：OP_HASH160 20[20 byte hash]OP_EQUAL,脚本中2-22为20字节的数据，放到vSolutionsRet中
     if (scriptPubKey.IsPayToScriptHash())
     {
         std::vector<unsigned char> hashBytes(scriptPubKey.begin()+2, scriptPubKey.begin()+22);
         vSolutionsRet.push_back(hashBytes);
         return TxoutType::SCRIPTHASH;
     }
-
+    //P2WKH/P2WSH类型的处理
     int witnessversion;
     std::vector<unsigned char> witnessprogram;
     if (scriptPubKey.IsWitnessProgram(witnessversion, witnessprogram)) {
@@ -152,7 +153,7 @@ TxoutType Solver(const CScript& scriptPubKey, std::vector<std::vector<unsigned c
     if (scriptPubKey.size() >= 1 && scriptPubKey[0] == OP_RETURN && scriptPubKey.IsPushOnly(scriptPubKey.begin()+1)) {
         return TxoutType::NULL_DATA;
     }
-
+    
     std::vector<unsigned char> data;
     if (MatchPayToPubkey(scriptPubKey, data)) {
         vSolutionsRet.push_back(std::move(data));
@@ -263,6 +264,7 @@ bool ExtractDestinations(const CScript& scriptPubKey, TxoutType& typeRet, std::v
 
 namespace
 {
+    //使用visitor设计模式的实现方式进行处理，提供了CScriptVisitor针对不同类型的地址生成对应的锁定脚本
 class CScriptVisitor : public boost::static_visitor<CScript>
 {
 public:

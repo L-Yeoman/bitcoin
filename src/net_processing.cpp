@@ -1643,7 +1643,9 @@ void static ProcessGetBlockData(CNode& pfrom, const CChainParams& chainparams, c
         }
     }
 }
-
+/**
+ * 检查内存池中是否存在交易
+*/
 //! Determine whether or not a peer can request a transaction, and return it (or nullptr if not found or not allowed).
 static CTransactionRef FindTxForGetData(const CTxMemPool& mempool, const CNode& peer, const GenTxid& gtxid, const std::chrono::seconds mempool_req, const std::chrono::seconds now) LOCKS_EXCLUDED(cs_main)
 {
@@ -1659,6 +1661,7 @@ static CTransactionRef FindTxForGetData(const CTxMemPool& mempool, const CNode& 
 
     {
         LOCK(cs_main);
+        //检查mapRelay或者内存交易池中是否存在交易，如果存在发送TX消息
         // Otherwise, the transaction must have been announced recently.
         if (State(peer.GetId())->m_recently_announced_invs.contains(gtxid.GetHash())) {
             // If it was, it can be relayed from either the mempool...
@@ -1688,6 +1691,7 @@ void static ProcessGetData(CNode& pfrom, Peer& peer, const CChainParams& chainpa
     // Process as many TX items from the front of the getdata queue as
     // possible, since they're common and it's efficient to batch process
     // them.
+    //遍历集合
     while (it != peer.m_getdata_requests.end() && it->IsGenTxMsg()) {
         if (interruptMsgProc) return;
         // The send buffer provides backpressure. If there's no space in
@@ -2663,6 +2667,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
     }
 
     if (msg_type == NetMsgType::INV) {
+        //读出数据
         std::vector<CInv> vInv;
         vRecv >> vInv;
         if (vInv.size() > MAX_INV_SZ)
@@ -2684,7 +2689,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
 
         const auto current_time = GetTime<std::chrono::microseconds>();
         uint256* best_block{nullptr};
-
+        //处理收到的每一个INV消息
         for (CInv& inv : vInv) {
             if (interruptMsgProc) return;
 
@@ -2696,8 +2701,9 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
             } else {
                 if (inv.IsMsgWtx()) continue;
             }
-
+            //如果是一个区块
             if (inv.IsMsgBlk()) {
+                //判断交易是否已经存在于区块链上
                 const bool fAlreadyHave = AlreadyHaveBlock(inv.hash);
                 LogPrint(BCLog::NET, "got inv: %s  %s peer=%d\n", inv.ToString(), fAlreadyHave ? "have" : "new", pfrom.GetId());
 
@@ -2710,7 +2716,9 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
                     // then fetch the blocks we need to catch up.
                     best_block = &inv.hash;
                 }
-            } else if (inv.IsGenTxMsg()) {
+            } 
+            //如果收到的是一笔交易
+            else if (inv.IsGenTxMsg()) {
                 const GenTxid gtxid = ToGenTxid(inv);
                 const bool fAlreadyHave = AlreadyHaveTx(gtxid, m_mempool);
                 LogPrint(BCLog::NET, "got inv: %s  %s peer=%d\n", inv.ToString(), fAlreadyHave ? "have" : "new", pfrom.GetId());
@@ -2737,6 +2745,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
     }
 
     if (msg_type == NetMsgType::GETDATA) {
+        //从流中读取数据
         std::vector<CInv> vInv;
         vRecv >> vInv;
         if (vInv.size() > MAX_INV_SZ)
@@ -2753,7 +2762,9 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
 
         {
             LOCK(peer->m_getdata_requests_mutex);
+            //将所有GETDATA请求添加到集合中
             peer->m_getdata_requests.insert(peer->m_getdata_requests.end(), vInv.begin(), vInv.end());
+            //处理请求
             ProcessGetData(pfrom, *peer, m_chainparams, m_connman, m_mempool, interruptMsgProc);
         }
 
@@ -2956,7 +2967,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
             pfrom.fDisconnect = true;
             return;
         }
-
+        //从流中读取交易
         CTransactionRef ptx;
         vRecv >> ptx;
         const CTransaction& tx = *ptx;
@@ -3011,7 +3022,7 @@ void PeerManager::ProcessMessage(CNode& pfrom, const std::string& msg_type, CDat
 
         TxValidationState state;
         std::list<CTransactionRef> lRemovedTxn;
-
+        //如果交易不存在，则调用AcceptToMemoryPool将交易加入到内存交易池
         if (AcceptToMemoryPool(m_mempool, state, ptx, &lRemovedTxn, false /* bypass_limits */)) {
             m_mempool.check(&::ChainstateActive().CoinsTip());
             // As this version of the transaction was acceptable, we can forget about any

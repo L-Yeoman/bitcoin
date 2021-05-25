@@ -18,7 +18,9 @@
 #include <univalue.h>
 #include <util/rbf.h>
 #include <util/strencodings.h>
-
+/**
+ * 生成交易的对象
+*/
 CMutableTransaction ConstructTransaction(const UniValue& inputs_in, const UniValue& outputs_in, const UniValue& locktime, bool rbf)
 {
     if (outputs_in.isNull()) {
@@ -36,20 +38,20 @@ CMutableTransaction ConstructTransaction(const UniValue& inputs_in, const UniVal
     UniValue outputs = outputs_is_obj ? outputs_in.get_obj() : outputs_in.get_array();
 
     CMutableTransaction rawTx;
-
+    //从参数提取交易的锁定时间
     if (!locktime.isNull()) {
         int64_t nLockTime = locktime.get_int64();
         if (nLockTime < 0 || nLockTime > LOCKTIME_MAX)
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid parameter, locktime out of range");
         rawTx.nLockTime = nLockTime;
     }
-
+    //解析参数，生成交易的输入
     for (unsigned int idx = 0; idx < inputs.size(); idx++) {
         const UniValue& input = inputs[idx];
         const UniValue& o = input.get_obj();
-
+        //该输入指向的交易
         uint256 txid = ParseHashO(o, "txid");
-
+        //该输入指向的UTXO在其交易中的索引
         const UniValue& vout_v = find_value(o, "vout");
         if (!vout_v.isNum())
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid parameter, missing vout key");
@@ -101,7 +103,7 @@ CMutableTransaction ConstructTransaction(const UniValue& inputs_in, const UniVal
     // Duplicate checking
     std::set<CTxDestination> destinations;
     bool has_data{false};
-
+    //根据参数生成交易的输出
     for (const std::string& name_ : outputs.getKeys()) {
         if (name_ == "data") {
             if (has_data) {
@@ -113,6 +115,7 @@ CMutableTransaction ConstructTransaction(const UniValue& inputs_in, const UniVal
             CTxOut out(0, CScript() << OP_RETURN << data);
             rawTx.vout.push_back(out);
         } else {
+            //解析目标地址
             CTxDestination destination = DecodeDestination(name_);
             if (!IsValidDestination(destination)) {
                 throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, std::string("Invalid Bitcoin address: ") + name_);
@@ -121,7 +124,7 @@ CMutableTransaction ConstructTransaction(const UniValue& inputs_in, const UniVal
             if (!destinations.insert(destination).second) {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, std::string("Invalid parameter, duplicated address: ") + name_);
             }
-
+            //根据地址生成交易输出的锁定脚本
             CScript scriptPubKey = GetScriptForDestination(destination);
             CAmount nAmount = AmountFromValue(outputs[name_]);
 

@@ -22,11 +22,15 @@
  */
 static const int SERIALIZE_TRANSACTION_NO_WITNESS = 0x40000000;
 
-/** An outpoint - a combination of a transaction hash and an index n into its vout */
+/** 
+ * 该输入所指向的UTXO
+ * An outpoint - a combination of a transaction hash and an index n into its vout */
 class COutPoint
 {
 public:
+    //UTXO所在的交易hash
     uint256 hash;
+    //UTXO的索引
     uint32_t n;
 
     static constexpr uint32_t NULL_INDEX = std::numeric_limits<uint32_t>::max();
@@ -65,9 +69,13 @@ public:
 class CTxIn
 {
 public:
+    //该输入引用的UTXO
     COutPoint prevout;
+    //解锁脚本，用于解锁输入指向的UTXO
     CScript scriptSig;
+    //相对时间锁
     uint32_t nSequence;
+    //见证脚本
     CScriptWitness scriptWitness; //!< Only serialized through CTransaction
 
     /* Setting nSequence to this value for every input in a transaction
@@ -122,13 +130,17 @@ public:
     std::string ToString() const;
 };
 
-/** An output of a transaction.  It contains the public key that the next input
+/** 
+ * 交易的输出类
+ * An output of a transaction.  It contains the public key that the next input
  * must be able to sign with to claim it.
  */
 class CTxOut
 {
 public:
+    //表示该UTXO 的比特币数量
     CAmount nValue;
+    //表示该UTXO的锁定脚本
     CScript scriptPubKey;
 
     CTxOut()
@@ -273,9 +285,13 @@ public:
     // actually immutable; deserialization and assignment are implemented,
     // and bypass the constness. This is safe, as they update the entire
     // structure, including the hash.
+    //交易的全部输入
     const std::vector<CTxIn> vin;
+    //交易的全部输出
     const std::vector<CTxOut> vout;
+    //交易版本
     const int32_t nVersion;
+    //交易锁定时间，用来控制在一定时间之后交易的输出才能被花费
     const uint32_t nLockTime;
 
 private:
@@ -349,7 +365,10 @@ public:
     }
 };
 
-/** A mutable version of CTransaction. */
+/**
+ *  CMutableTransation与CTransaction的字段完全相同，所不同的是字段前面少了const修饰符，因此一个
+ * CMutable Transaction对象生成以后，他的字段还可以重新赋值
+ *  A mutable version of CTransaction. */
 struct CMutableTransaction
 {
     std::vector<CTxIn> vin;
